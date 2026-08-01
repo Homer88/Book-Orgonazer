@@ -1,0 +1,8 @@
+/book/1
+/book/2
+/book
+/book_app/build
+*.exe
+/conver_db/build
+/db
+make.md
