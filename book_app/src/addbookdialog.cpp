@@ -56,7 +56,7 @@ AddBookDialog::AddBookDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(QStringLiteral("Добавить книгу"));
-    resize(600, 680);
+    resize(600, 640);
 
     auto *layout = new QVBoxLayout(this);
     auto *scroll = new QScrollArea;

@@ -6,3 +6,7 @@
 /conver_db/build
 /db
 make.md
+*.user
+/build-book_app-Desktop_Qt_5_14_2_MinGW_64_bit-Release/.cmake/api/v1/query
+/build-book_app-Desktop_Qt_5_14_2_MinGW_64_bit-Release
+*.py
