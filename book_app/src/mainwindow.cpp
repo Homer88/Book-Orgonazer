@@ -1,6 +1,9 @@
 #include "mainwindow.h"
 #include "addbookdialog.h"
 #include "editbookdialog.h"
+#include "massadddialog.h"
+#include "settings.h"
+#include "settingsdialog.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -139,6 +142,34 @@ MainWindow::MainWindow(QWidget *parent)
     auto *clearStatusAction = toolBar->addAction(QStringLiteral("Сбросить статус"));
     clearStatusAction->setToolTip(QStringLiteral("Снять отметку «Читаю»/«Перевожу» с выбранной книги"));
     connect(clearStatusAction, &QAction::triggered, this, &MainWindow::clearStatus);
+    auto *settingsAction = toolBar->addAction(QStringLiteral("Настройки"));
+    settingsAction->setToolTip(QStringLiteral("Настройки приложения (шрифт, масштаб)"));
+    connect(settingsAction, &QAction::triggered, this, [this]() {
+        SettingsDialog dlg(this);
+        if (dlg.exec() == QDialog::Accepted) {
+            refreshQuery();
+            setMinimumSize(QSize(qRound(800 * SettingsManager::instance().scale()),
+                                 qRound(500 * SettingsManager::instance().scale())));
+            resize(qRound(1200 * SettingsManager::instance().scale()),
+                   qRound(700 * SettingsManager::instance().scale()));
+        }
+    });
+
+    auto *massAddAction = toolBar->addAction(QStringLiteral("Массовое добавление"));
+    massAddAction->setToolTip(QStringLiteral("Сканировать папку и добавить новые книги"));
+    connect(massAddAction, &QAction::triggered, this, [this]() {
+        MassAddDialog dlg(m_baseDir, this);
+        dlg.exec();
+        refreshQuery();
+    });
+
+    {
+        auto &s = SettingsManager::instance();
+        s.load();
+        QApplication::setFont(s.appFont());
+        setMinimumSize(QSize(qRound(800 * s.scale()), qRound(500 * s.scale())));
+        resize(qRound(1200 * s.scale()), qRound(700 * s.scale()));
+    }
 
     refreshQuery();
 }
@@ -228,6 +259,28 @@ QWidget *MainWindow::buildDetailsPanel()
     m_coverLabel->setMinimumHeight(300);
     m_coverLabel->setText(QStringLiteral("Нет обложки"));
     coverLayout->addWidget(m_coverLabel);
+
+    auto *coverBtns = new QHBoxLayout;
+    auto *btnPrev = new QPushButton(QStringLiteral("<<"));
+    auto *btnMinus = new QPushButton(QStringLiteral("−"));
+    auto *btnPlus = new QPushButton(QStringLiteral("+"));
+    auto *btnNext = new QPushButton(QStringLiteral(">>"));
+    btnPrev->setToolTip(QStringLiteral("Предыдущая обложка"));
+    btnMinus->setToolTip(QStringLiteral("Уменьшить"));
+    btnPlus->setToolTip(QStringLiteral("Увеличить"));
+    btnNext->setToolTip(QStringLiteral("Следующая обложка"));
+    connect(btnPrev, &QPushButton::clicked, this, &MainWindow::prevCover);
+    connect(btnMinus, &QPushButton::clicked, this, &MainWindow::zoomOut);
+    connect(btnPlus, &QPushButton::clicked, this, &MainWindow::zoomIn);
+    connect(btnNext, &QPushButton::clicked, this, &MainWindow::nextCover);
+    coverBtns->addStretch(1);
+    coverBtns->addWidget(btnPrev);
+    coverBtns->addWidget(btnMinus);
+    coverBtns->addWidget(btnPlus);
+    coverBtns->addWidget(btnNext);
+    coverBtns->addStretch(1);
+    coverLayout->addLayout(coverBtns);
+
     coverLayout->addStretch(1);
     scroll->setWidget(coverHost);
     layout->addWidget(scroll, 2);
@@ -372,6 +425,8 @@ void MainWindow::showBookDetails(int row)
 {
     if (!m_model || row < 0 || row >= m_model->rowCount()) {
         m_detailsBrowser->clear();
+        m_currentCoverPath.clear();
+        m_currentRow = -1;
         m_coverLabel->setText(QStringLiteral("Нет обложки"));
         m_statusLabel->setText(tr("Найдено книг: %1").arg(m_model ? m_model->rowCount() : 0));
         return;
@@ -442,13 +497,53 @@ void MainWindow::showBookDetails(int row)
     if (!QFileInfo::exists(coverPath) && !m_noImagePath.isEmpty())
         coverPath = m_noImagePath;
 
+    m_currentCoverPath = coverPath;
+    m_currentRow = row;
+    updateCoverPixmap();
+}
+
+void MainWindow::updateCoverPixmap()
+{
     QPixmap pix;
-    if (pix.load(coverPath)) {
-        const int maxW = 260, maxH = 340;
+    if (!m_currentCoverPath.isEmpty() && pix.load(m_currentCoverPath)) {
+        const int maxW = qRound(260 * m_coverZoom);
+        const int maxH = qRound(340 * m_coverZoom);
         m_coverLabel->setPixmap(pix.scaled(maxW, maxH, Qt::KeepAspectRatio,
                                             Qt::SmoothTransformation));
     } else {
         m_coverLabel->setText(QStringLiteral("Нет обложки"));
+    }
+}
+
+void MainWindow::prevCover()
+{
+    if (!m_table || !m_model) return;
+    const int row = m_table->currentIndex().row();
+    if (row > 0)
+        m_table->setCurrentIndex(m_model->index(row - 1, 0));
+}
+
+void MainWindow::nextCover()
+{
+    if (!m_table || !m_model) return;
+    const int row = m_table->currentIndex().row();
+    if (row < m_model->rowCount() - 1)
+        m_table->setCurrentIndex(m_model->index(row + 1, 0));
+}
+
+void MainWindow::zoomIn()
+{
+    if (m_coverZoom < 5.0) {
+        m_coverZoom += 0.25;
+        updateCoverPixmap();
+    }
+}
+
+void MainWindow::zoomOut()
+{
+    if (m_coverZoom > 0.25) {
+        m_coverZoom -= 0.25;
+        updateCoverPixmap();
     }
 }
 

@@ -32,6 +32,11 @@ private slots:
     void resetFilters();
     void pickRandomBook();
     void clearStatus();
+    void prevCover();
+    void nextCover();
+    void zoomIn();
+    void zoomOut();
+    void updateCoverPixmap();
 
 private:
     QWidget *buildFilterBar();
@@ -66,4 +71,7 @@ private:
 
     QString m_baseDir;
     QString m_noImagePath;
+    QString m_currentCoverPath;
+    double m_coverZoom = 1.0;
+    int m_currentRow = -1;
 };

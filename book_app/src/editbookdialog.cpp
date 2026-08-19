@@ -1,5 +1,6 @@
 #include "editbookdialog.h"
 #include "langtable.h"
+#include "settings.h"
 
 #include <QCheckBox>
 #include <QCryptographicHash>
@@ -68,6 +69,7 @@ EditBookDialog::EditBookDialog(QWidget *parent)
 {
     setWindowTitle(QStringLiteral("Редактировать книгу"));
     resize(600, 640);
+    setMaximumHeight(SettingsManager::instance().maxFormHeight());
 
     auto *layout = new QVBoxLayout(this);
     auto *scroll = new QScrollArea;

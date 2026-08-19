@@ -1,5 +1,6 @@
 #include "addbookdialog.h"
 #include "langtable.h"
+#include "settings.h"
 
 #include <QCheckBox>
 #include <QCryptographicHash>
@@ -57,6 +58,7 @@ AddBookDialog::AddBookDialog(QWidget *parent)
 {
     setWindowTitle(QStringLiteral("Добавить книгу"));
     resize(600, 640);
+    setMaximumHeight(SettingsManager::instance().maxFormHeight());
 
     auto *layout = new QVBoxLayout(this);
     auto *scroll = new QScrollArea;

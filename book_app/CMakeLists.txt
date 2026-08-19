@@ -25,8 +25,30 @@ add_executable(book_app WIN32
     src/editbookdialog.cpp
     src/editbookdialog.h
     src/langtable.h
+    src/massadddialog.cpp
+    src/massadddialog.h
+    src/settings.cpp
+    src/settings.h
+    src/settingsdialog.cpp
+    src/settingsdialog.h
+    src/book.qrc
 )
-target_link_libraries(book_app PRIVATE Qt5::Widgets Qt5::Sql)
+
+find_program(WINDRES_EXE windres HINTS "${QT_ROOT}/../Tools/mingw730_64/bin" "D:/Qt/Qt5.14.2/Tools/mingw730_64/bin")
+
+add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/book.rc.obj"
+    COMMAND "${WINDRES_EXE}" --input-format=rc --output-format=coff --target=pe-x86-64
+            -o "${CMAKE_CURRENT_BINARY_DIR}/book.rc.obj"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/book.rc"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/book.rc"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/book.ico"
+    COMMENT "Compiling book.rc icon resource"
+)
+add_custom_target(book_rc ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/book.rc.obj")
+add_dependencies(book_app book_rc)
+target_link_libraries(book_app PRIVATE Qt5::Widgets Qt5::Sql
+    "${CMAKE_CURRENT_BINARY_DIR}/book.rc.obj")
 
 # --- Deployment: copy runtime files next to the executable ---
 
