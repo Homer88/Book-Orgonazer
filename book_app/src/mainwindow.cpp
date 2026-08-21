@@ -599,6 +599,19 @@ void MainWindow::editBook()
         return;
     }
     refreshQuery();
+
+    while (m_model->canFetchMore())
+        m_model->fetchMore();
+
+    for (int i = 0; i < m_model->rowCount(); ++i) {
+        const QVariant val = m_model->data(m_model->index(i, 0));
+        if (val.isValid() && val.toInt() == id) {
+            m_table->setCurrentIndex(m_model->index(i, 0));
+            m_table->scrollTo(m_model->index(i, 0),
+                              QAbstractItemView::PositionAtCenter);
+            return;
+        }
+    }
 }
 
 void MainWindow::openBook()

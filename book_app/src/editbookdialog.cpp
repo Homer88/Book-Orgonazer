@@ -386,9 +386,58 @@ QString EditBookDialog::commit()
                 QFile::remove(oldFile);
         }
 
+        const QStringList skipDel = {
+            QStringLiteral("cover.jpg"), QStringLiteral("thumbs.db"),
+            QStringLiteral("descripter.txt"),
+        };
+        const QStringList entries = targetDir.entryList(QDir::Files);
+        for (const QString &entry : entries) {
+            if (skipDel.contains(entry.toLower()))
+                continue;
+            if (entry == newFileName)
+                continue;
+            const QString eLow = entry.toLower();
+            if (eLow.endsWith(m_oldFormat.trimmed().toLower())) {
+                QFile::remove(targetDir.filePath(entry));
+                break;
+            }
+        }
+
         QFile::remove(m_selectedFile);
         size = bytesToSizeText(QFileInfo(destFile).size());
         crc = m_md5;
+    } else {
+        const QString dir = bookDirFromPart(m_baseDir, part);
+        if (!dir.isEmpty() && QDir(dir).exists()) {
+            const QString newFileName = m_authorEdit->text().trimmed() + format;
+            const QString newFile = QDir(dir).filePath(newFileName);
+
+            const QStringList skip = {
+                QStringLiteral("cover.jpg"),
+                QStringLiteral("thumbs.db"),
+                QStringLiteral("descripter.txt"),
+            };
+            const QStringList entries = QDir(dir).entryList(QDir::Files);
+            for (const QString &entry : entries) {
+                if (skip.contains(entry.toLower()))
+                    continue;
+                const QString ext = QFileInfo(entry).suffix().toLower();
+                if (m_oldFormat.trimmed().toLower().contains(ext) ||
+                    entry.toLower().endsWith(m_oldFormat.trimmed().toLower())) {
+                    const QString oldFile = QDir(dir).filePath(entry);
+                    if (oldFile != newFile) {
+                        if (QFile::exists(newFile))
+                            QFile::remove(newFile);
+                        if (!QFile::rename(oldFile, newFile)) {
+                            QFile::copy(oldFile, newFile);
+                            if (QFile::exists(newFile))
+                                QFile::remove(oldFile);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     QSqlQuery query(QSqlDatabase::database(QStringLiteral("book")));

@@ -9,6 +9,7 @@ class QLineEdit;
 class QProgressBar;
 class QLabel;
 class QPushButton;
+class QComboBox;
 
 struct ScannedBook {
     QString filePath;
@@ -43,8 +44,10 @@ private:
 
     QString m_baseDir;
     QLineEdit *m_folderEdit = nullptr;
+    QComboBox *m_statusCombo = nullptr;
     QTableWidget *m_table = nullptr;
     QLabel *m_statusLabel = nullptr;
+    QProgressBar *m_progressBar = nullptr;
     QPushButton *m_addButton = nullptr;
     QPushButton *m_toggleButton = nullptr;
     int m_newCount = 0;

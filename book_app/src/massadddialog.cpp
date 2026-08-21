@@ -1,7 +1,10 @@
 #include "massadddialog.h"
 #include "settings.h"
 
+#include <QComboBox>
+#include <QApplication>
 #include <QCheckBox>
+#include <QProgressBar>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
@@ -92,6 +95,14 @@ MassAddDialog::MassAddDialog(const QString &baseDir, QWidget *parent)
     topRow->addWidget(m_folderEdit, 1);
     topRow->addWidget(browseBtn);
     topRow->addWidget(scanBtn);
+
+    topRow->addSpacing(12);
+    topRow->addWidget(new QLabel(QStringLiteral("Статус:")));
+    m_statusCombo = new QComboBox;
+    m_statusCombo->addItems({QStringLiteral("(нет)"),
+                             QStringLiteral("Читаю"),
+                             QStringLiteral("Перевожу")});
+    topRow->addWidget(m_statusCombo);
     layout->addLayout(topRow);
 
     m_table = new QTableWidget;
@@ -110,6 +121,12 @@ MassAddDialog::MassAddDialog(const QString &baseDir, QWidget *parent)
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     layout->addWidget(m_table, 1);
+
+    m_progressBar = new QProgressBar;
+    m_progressBar->setRange(0, 100);
+    m_progressBar->setValue(0);
+    m_progressBar->setVisible(false);
+    layout->addWidget(m_progressBar);
 
     auto *bottomRow = new QHBoxLayout;
     m_statusLabel = new QLabel;
@@ -311,6 +328,19 @@ void MassAddDialog::addSelected()
     int count = 0;
     QStringList errors;
 
+    int totalChecked = 0;
+    for (int i = 0; i < m_table->rowCount(); ++i) {
+        auto *cb = qobject_cast<QCheckBox *>(m_table->cellWidget(i, ColCheck));
+        if (cb && cb->isChecked() && cb->isEnabled())
+            ++totalChecked;
+    }
+
+    m_progressBar->setRange(0, totalChecked);
+    m_progressBar->setValue(0);
+    m_progressBar->setVisible(totalChecked > 0);
+
+    int processed = 0;
+
     for (int i = 0; i < m_table->rowCount(); ++i) {
         auto *cb = qobject_cast<QCheckBox *>(m_table->cellWidget(i, ColCheck));
         if (!cb || !cb->isChecked())
@@ -368,7 +398,7 @@ void MassAddDialog::addSelected()
         QSqlQuery q(QSqlDatabase::database(QStringLiteral("book")));
         q.prepare(QStringLiteral(
             "INSERT INTO book ([index], name_book, ahtor, format, size, crc, "
-            "part, image) VALUES (?, ?, ?, ?, ?, ?, ?, 'cover.jpg')"));
+            "part, image, perevod) VALUES (?, ?, ?, ?, ?, ?, ?, 'cover.jpg', ?)"));
         q.addBindValue(newId);
         q.addBindValue(nameBook);
         q.addBindValue(QString());
@@ -376,6 +406,9 @@ void MassAddDialog::addSelected()
         q.addBindValue(sizeText);
         q.addBindValue(crc);
         q.addBindValue(folderRel);
+        const QString perevod = m_statusCombo->currentIndex() > 0
+            ? m_statusCombo->currentText() : QString();
+        q.addBindValue(perevod);
         if (!q.exec()) {
             errors << QStringLiteral("Ошибка БД (ID %1): %2")
                           .arg(newId)
@@ -396,6 +429,10 @@ void MassAddDialog::addSelected()
         m_table->item(i, ColStatus)->setText(QStringLiteral("Добавлено"));
         m_table->item(i, ColStatus)->setForeground(Qt::blue);
         ++count;
+
+        ++processed;
+        m_progressBar->setValue(processed);
+        QApplication::processEvents();
     }
 
     if (!errors.isEmpty())
@@ -403,4 +440,5 @@ void MassAddDialog::addSelected()
                              errors.join(QStringLiteral("\n")));
     m_statusLabel->setText(QStringLiteral("Добавлено: %1 книг").arg(count));
     m_addButton->setEnabled(false);
+    m_progressBar->setVisible(false);
 }
