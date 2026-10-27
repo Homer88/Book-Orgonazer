@@ -3,6 +3,7 @@
 #include <QDialog>
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 class QTableWidget;
 class QLineEdit;
@@ -30,6 +31,9 @@ class MassAddDialog : public QDialog
 public:
     explicit MassAddDialog(const QString &baseDir, QWidget *parent = nullptr);
 
+    // Статусы из [Status] в config.ini; последний («без статуса») не предлагается.
+    void setStatuses(const QStringList &statuses);
+
 private slots:
     void browseFolder();
     void scanFolder();
@@ -38,11 +42,13 @@ private slots:
 
 private:
     void scanRecursive(const QString &dir, QList<ScannedBook> *books);
+    void fillStatusCombo() const;
     QString computeCrc(const QString &path) const;
     void populateTable(const QList<ScannedBook> &books);
     QString nextIndex() const;
 
     QString m_baseDir;
+    QStringList m_statuses;
     QLineEdit *m_folderEdit = nullptr;
     QComboBox *m_statusCombo = nullptr;
     QTableWidget *m_table = nullptr;

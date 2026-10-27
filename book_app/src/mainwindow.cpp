@@ -1,5 +1,7 @@
 #include "mainwindow.h"
 #include "addbookdialog.h"
+#include "archivedialog.h"
+#include "dbschema.h"
 #include "editbookdialog.h"
 #include "massadddialog.h"
 #include "settings.h"
@@ -139,8 +141,14 @@ MainWindow::MainWindow(QWidget *parent)
     auto *randomAction = toolBar->addAction(QStringLiteral("Что почитать?"));
     randomAction->setToolTip(QStringLiteral("Случайная книга из текущего фильтра"));
     connect(randomAction, &QAction::triggered, this, &MainWindow::pickRandomBook);
-    auto *clearStatusAction = toolBar->addAction(QStringLiteral("Сбросить статус"));
-    clearStatusAction->setToolTip(QStringLiteral("Снять отметку «Читаю»/«Перевожу» с выбранной книги"));
+    auto *clearStatusAction = toolBar->addAction(QStringLiteral("Снять статус с книги"));
+    {
+        const QStringList all = statusValues();
+        const QStringList real = all.mid(0, all.size() - 1);
+        QString joined = real.join(QStringLiteral("»/«"));
+        clearStatusAction->setToolTip(
+            QStringLiteral("Снять отметку «%1» только с выбранной книги").arg(joined));
+    }
     connect(clearStatusAction, &QAction::triggered, this, &MainWindow::clearStatus);
     auto *settingsAction = toolBar->addAction(QStringLiteral("Настройки"));
     settingsAction->setToolTip(QStringLiteral("Настройки приложения (шрифт, масштаб)"));
@@ -155,10 +163,25 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
+    auto *archiveAction = toolBar->addAction(QStringLiteral("В архив (дубль)"));
+    archiveAction->setToolTip(QStringLiteral("Найти дубли книги с другим форматом/CRC "
+                                            "и перевести выбранную в архив"));
+    connect(archiveAction, &QAction::triggered, this, [this]() {
+        if (!m_table->currentIndex().isValid())
+            return;
+        const int id = m_model->data(m_model->index(m_table->currentIndex().row(), 0)).toInt();
+        if (id <= 0)
+            return;
+        ArchiveDialog dlg(m_baseDir, id, this);
+        dlg.exec();
+        refreshQuery();
+    });
+
     auto *massAddAction = toolBar->addAction(QStringLiteral("Массовое добавление"));
     massAddAction->setToolTip(QStringLiteral("Сканировать папку и добавить новые книги"));
     connect(massAddAction, &QAction::triggered, this, [this]() {
         MassAddDialog dlg(m_baseDir, this);
+        dlg.setStatuses(statusValues().mid(0, statusValues().size() - 1));
         dlg.exec();
         refreshQuery();
     });
@@ -193,6 +216,25 @@ QString MainWindow::resolveBaseDir() const
     return QFileInfo(m_configPath).dir().absolutePath();
 }
 
+QStringList MainWindow::statusValues() const
+{
+    // Статусы берём из [Status] в config.ini; последний — «без статуса».
+    QStringList list = m_config.values(QStringLiteral("Status"));
+    list.removeAll(QString());
+    if (list.isEmpty()) {
+        list << QStringLiteral("Читаю") << QStringLiteral("Перевожу")
+             << QStringLiteral("Без статуса");
+    }
+    if (list.last().compare(QStringLiteral("Без статуса"), Qt::CaseInsensitive) != 0)
+        list << QStringLiteral("Без статуса");
+    return list;
+}
+
+QString MainWindow::noStatusValue() const
+{
+    return statusValues().last();
+}
+
 QWidget *MainWindow::buildFilterBar()
 {
     auto *panel = new QWidget(this);
@@ -219,9 +261,7 @@ QWidget *MainWindow::buildFilterBar()
     m_studioCombo = makeCombo(m_config.values(QStringLiteral("Studio")));
     m_vidCombo = makeCombo(m_config.values(QStringLiteral("Tipog")));
     m_sourceCombo = makeCombo(m_config.values(QStringLiteral("Application")));
-    m_statusCombo = makeCombo({QStringLiteral("Читаю"),
-                               QStringLiteral("Перевожу"),
-                               QStringLiteral("Без статуса")});
+    m_statusCombo = makeCombo(statusValues());
 
     auto addFilterRow = [&layout](const QString &label, QWidget *w) {
         auto *row = new QHBoxLayout;
@@ -342,7 +382,7 @@ QString MainWindow::buildWhereClause(QStringList *values) const
     addCond(m_sourceCombo, "source");
 
     if (m_statusCombo && m_statusCombo->currentIndex() > 0) {
-        if (m_statusCombo->currentText() == QStringLiteral("Без статуса")) {
+        if (m_statusCombo->currentText() == noStatusValue()) {
             conds << QStringLiteral("(perevod IS NULL OR perevod = '')");
         } else {
             conds << QStringLiteral("perevod = ?");
@@ -370,6 +410,19 @@ void MainWindow::refreshQuery()
             m_statusLabel->setText(QStringLiteral("Ошибка открытия БД: ") +
                                    db.lastError().text());
             return;
+        }
+    }
+
+    {
+        QString schemaNote;
+        if (!DbSchema::ensureTables(&schemaNote)) {
+            QMessageBox::warning(this, QStringLiteral("Схема базы данных"),
+                                 QStringLiteral("Не удалось подготовить базу:\n%1")
+                                     .arg(schemaNote));
+        } else if (!schemaNote.isEmpty()) {
+            QMessageBox::information(this, QStringLiteral("Схема базы данных"),
+                                     QStringLiteral("База обновлена под текущую версию "
+                                                    "программы:\n%1").arg(schemaNote));
         }
     }
 
@@ -599,7 +652,11 @@ void MainWindow::editBook()
         return;
     }
     refreshQuery();
+    selectBookId(id);
+}
 
+void MainWindow::selectBookId(int id)
+{
     while (m_model->canFetchMore())
         m_model->fetchMore();
 
@@ -713,19 +770,24 @@ void MainWindow::pickRandomBook()
     box.setText(QStringLiteral("Книга (ID %1): %2\n\nЧто с ней делать?")
                     .arg(id)
                     .arg(name));
-    QPushButton *readButton =
-        box.addButton(QStringLiteral("Читаю"), QMessageBox::AcceptRole);
-    QPushButton *translateButton =
-        box.addButton(QStringLiteral("Перевожу"), QMessageBox::AcceptRole);
-    box.addButton(QStringLiteral("Отмена"), QMessageBox::RejectRole);
+
+    // Кнопки — все статусы из [Status], кроме «без статуса».
+    const QStringList all = statusValues();
+    const QStringList real = all.mid(0, all.size() - 1);
+    QList<QPushButton *> buttons;
+    for (const QString &st : real) {
+        buttons << box.addButton(st, QMessageBox::AcceptRole);
+    }
+    QPushButton *cancelButton =
+        box.addButton(QStringLiteral("Отмена"), QMessageBox::RejectRole);
     box.exec();
 
     QString status;
-    if (box.clickedButton() == readButton)
-        status = QStringLiteral("Читаю");
-    else if (box.clickedButton() == translateButton)
-        status = QStringLiteral("Перевожу");
-    else
+    for (int i = 0; i < buttons.size(); ++i) {
+        if (box.clickedButton() == buttons.at(i))
+            status = real.at(i);
+    }
+    if (box.clickedButton() == cancelButton || status.isEmpty())
         return;
 
     QSqlQuery query(QSqlDatabase::database(QStringLiteral("book")));
@@ -774,4 +836,5 @@ void MainWindow::clearStatus()
         return;
     }
     refreshQuery();
+    selectBookId(id);
 }

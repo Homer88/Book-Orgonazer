@@ -1,4 +1,5 @@
 #include "addbookdialog.h"
+#include "dbschema.h"
 #include "langtable.h"
 #include "settings.h"
 
@@ -206,6 +207,20 @@ QWidget *AddBookDialog::buildForm()
     pathForm->addRow(QStringLiteral("Путь (part):"), m_partEdit);
     pathForm->addRow(QStringLiteral("Обложка:"), m_imageEdit);
 
+    m_sourceFormatEdit = new QLineEdit;
+    m_sourceFormatEdit->setPlaceholderText(QStringLiteral("Например: .iso"));
+    pathForm->addRow(QStringLiteral("Формат приложения:"), m_sourceFormatEdit);
+
+    auto *appRow = new QHBoxLayout;
+    m_appFileEdit = new QLineEdit;
+    m_appFileEdit->setReadOnly(true);
+    m_appFileEdit->setPlaceholderText(QStringLiteral("Файл приложения (iso, img...)"));
+    auto *appButton = new QPushButton(QStringLiteral("Приложить..."));
+    connect(appButton, &QPushButton::clicked, this, &AddBookDialog::browseAppFile);
+    appRow->addWidget(m_appFileEdit, 1);
+    appRow->addWidget(appButton);
+    pathForm->addRow(QStringLiteral("Приложение:"), appRow);
+
     auto *descBox = new QGroupBox(QStringLiteral("Описание"));
     auto *descLayout = new QVBoxLayout(descBox);
     m_descEdit = new QPlainTextEdit;
@@ -262,8 +277,11 @@ void AddBookDialog::processSelectedFile()
     check.prepare(QStringLiteral("SELECT [index], name_book, ahtor FROM book "
                                  "WHERE crc = ?"));
     check.addBindValue(m_md5);
-    if (!check.exec() || !check.next())
+    if (!check.exec() || !check.next()) {
+        if (DbSchema::crcKnown(m_md5))
+            reportHistoryHit();
         return;
+    }
 
     const int id = check.value(0).toInt();
     const QString name = check.value(1).toString();
@@ -279,6 +297,28 @@ void AddBookDialog::processSelectedFile()
                               QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
         QFile::remove(m_selectedFile);
     }
+
+    m_selectedFile.clear();
+    m_fileEdit->clear();
+    m_md5.clear();
+    m_crcEdit->clear();
+    m_sizeEdit->clear();
+}
+
+void AddBookDialog::reportHistoryHit()
+{
+    QMessageBox box(this);
+    box.setWindowTitle(QStringLiteral("История CRC"));
+    box.setText(QStringLiteral("Этот файл уже обрабатывался ранее — "
+                              "вероятно, это перевод уже имеющейся книги.\n\n"
+                              "Удалить выбранный файл с диска?"));
+    QPushButton *del = box.addButton(QStringLiteral("Удалить файл"),
+                                     QMessageBox::DestructiveRole);
+    box.addButton(QStringLiteral("Оставить"), QMessageBox::RejectRole);
+    box.exec();
+
+    if (box.clickedButton() == del)
+        QFile::remove(m_selectedFile);
 
     m_selectedFile.clear();
     m_fileEdit->clear();
@@ -362,6 +402,18 @@ QString AddBookDialog::commit()
     if (!coverSrc.isEmpty() && QFileInfo::exists(coverSrc))
         QFile::copy(coverSrc, coverDest);
 
+    QString sourceFormat = m_sourceFormatEdit->text().trimmed();
+    if (!m_selectedAppFile.isEmpty()) {
+        const QString appDest =
+            targetDir.filePath(QFileInfo(m_selectedAppFile).fileName());
+        if (QFile::copy(m_selectedAppFile, appDest))
+            QFile::remove(m_selectedAppFile);
+        const QString suffix = QFileInfo(appDest).suffix();
+        sourceFormat = suffix.isEmpty() ? sourceFormat
+                                        : QLatin1Char('.') + suffix;
+        m_appFileEdit->setText(QFileInfo(appDest).fileName());
+    }
+
     QFile desc(targetDir.filePath(QStringLiteral("descripter.txt")));
     if (desc.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         desc.write(m_descEdit->toPlainText().toUtf8());
@@ -373,9 +425,9 @@ QString AddBookDialog::commit()
     QSqlQuery query(QSqlDatabase::database(QStringLiteral("book")));
     query.prepare(QStringLiteral(
         "INSERT INTO book ([index], name_book, ahtor, yaer, format, lang, lang_string, "
-        "langav, tematica, system, studio, vid, source, pages, izdatel, size, crc, "
-        "part, image) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+        "langav, tematica, system, studio, vid, source, source_format, pages, "
+        "izdatel, size, crc, part, image) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
     query.addBindValue(nextIndex);
     query.addBindValue(m_nameEdit->text().trimmed());
     query.addBindValue(m_authorEdit->text().trimmed());
@@ -389,6 +441,7 @@ QString AddBookDialog::commit()
     query.addBindValue(m_studioCombo->currentText().trimmed());
     query.addBindValue(m_vidCombo->currentText().trimmed());
     query.addBindValue(m_sourceCombo->currentText().trimmed());
+    query.addBindValue(sourceFormat);
     query.addBindValue(m_pagesSpin->value() == 0 ? QVariant() : QVariant(m_pagesSpin->value()));
     query.addBindValue(m_izdatelEdit->text().trimmed());
     query.addBindValue(m_sizeEdit->text().trimmed());
@@ -398,5 +451,24 @@ QString AddBookDialog::commit()
     if (!query.exec())
         return QStringLiteral("Не удалось добавить книгу:\n%1").arg(query.lastError().text());
 
+    DbSchema::rememberCrc(m_md5, nextIndex, QStringLiteral("добавление"));
     return QString();
+}
+
+void AddBookDialog::browseAppFile()
+{
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Выберите файл приложения"), QString(),
+        QStringLiteral("Приложения (*.iso *.img *.bin *.cue *.mdf *.nrg *.zip *.rar);;"
+                       "Все файлы (*)"));
+    if (file.isEmpty())
+        return;
+
+    m_selectedAppFile = file;
+    m_appFileEdit->setText(QFileInfo(file).fileName());
+    const QString suffix = QFileInfo(file).suffix();
+    if (!suffix.isEmpty()) {
+        m_sourceFormatEdit->setText(QLatin1Char('.') + suffix);
+        m_sourceCombo->setCurrentText(QStringLiteral("Есть"));
+    }
 }

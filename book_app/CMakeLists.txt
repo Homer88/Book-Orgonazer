@@ -18,10 +18,14 @@ add_executable(book_app WIN32
     src/main.cpp
     src/configloader.cpp
     src/configloader.h
+    src/dbschema.cpp
+    src/dbschema.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/addbookdialog.cpp
     src/addbookdialog.h
+    src/archivedialog.cpp
+    src/archivedialog.h
     src/editbookdialog.cpp
     src/editbookdialog.h
     src/langtable.h

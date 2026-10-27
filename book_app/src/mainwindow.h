@@ -32,6 +32,7 @@ private slots:
     void resetFilters();
     void pickRandomBook();
     void clearStatus();
+    void selectBookId(int id);
     void prevCover();
     void nextCover();
     void zoomIn();
@@ -47,6 +48,8 @@ private:
     QString bookFile(const QString &part, const QString &ahtor,
                      const QString &format) const;
     QString resolveBaseDir() const;
+    QStringList statusValues() const;
+    QString noStatusValue() const;
 
     ConfigLoader m_config;
     QString m_configPath;

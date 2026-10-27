@@ -1,4 +1,5 @@
 #include "massadddialog.h"
+#include "dbschema.h"
 #include "settings.h"
 
 #include <QComboBox>
@@ -17,6 +18,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -51,13 +53,19 @@ QString bytesToSizeText(qint64 bytes)
     return QStringLiteral("%1 кб").arg(qRound64(bytes / 1024.0));
 }
 
-QStringList existingCrcs()
+QSet<QString> existingCrcs()
 {
-    QStringList crcs;
+    QSet<QString> crcs;
     QSqlQuery q(QSqlDatabase::database(QStringLiteral("book")));
     if (q.exec(QStringLiteral("SELECT crc FROM book WHERE crc IS NOT NULL AND crc != ''")))
         while (q.next())
             crcs << q.value(0).toString().toUpper();
+
+    QSqlQuery h(QSqlDatabase::database(QStringLiteral("book")));
+    if (h.exec(QStringLiteral("SELECT crc FROM crc_history WHERE crc IS NOT NULL AND crc != ''")))
+        while (h.next())
+            crcs << h.value(0).toString().toUpper();
+
     return crcs;
 }
 
@@ -78,6 +86,7 @@ int findNextIndex()
 MassAddDialog::MassAddDialog(const QString &baseDir, QWidget *parent)
     : QDialog(parent)
     , m_baseDir(baseDir)
+    , m_statuses({QStringLiteral("Читаю"), QStringLiteral("Перевожу")})
 {
     setWindowTitle(QStringLiteral("Массовое добавление"));
     resize(900, 600);
@@ -99,9 +108,7 @@ MassAddDialog::MassAddDialog(const QString &baseDir, QWidget *parent)
     topRow->addSpacing(12);
     topRow->addWidget(new QLabel(QStringLiteral("Статус:")));
     m_statusCombo = new QComboBox;
-    m_statusCombo->addItems({QStringLiteral("(нет)"),
-                             QStringLiteral("Читаю"),
-                             QStringLiteral("Перевожу")});
+    fillStatusCombo();
     topRow->addWidget(m_statusCombo);
     layout->addLayout(topRow);
 
@@ -141,6 +148,21 @@ MassAddDialog::MassAddDialog(const QString &baseDir, QWidget *parent)
     layout->addLayout(bottomRow);
 }
 
+void MassAddDialog::setStatuses(const QStringList &statuses)
+{
+    m_statuses = statuses;
+    if (m_statusCombo)
+        fillStatusCombo();
+}
+
+void MassAddDialog::fillStatusCombo() const
+{
+    m_statusCombo->clear();
+    m_statusCombo->addItem(QStringLiteral("(без статуса)"));
+    for (const QString &st : m_statuses)
+        m_statusCombo->addItem(st);
+}
+
 void MassAddDialog::browseFolder()
 {
     const QString dir = QFileDialog::getExistingDirectory(
@@ -163,7 +185,7 @@ void MassAddDialog::scanFolder()
     m_dupCount = 0;
     m_addButton->setEnabled(false);
 
-    const QStringList crcs = existingCrcs();
+    const QSet<QString> crcs = existingCrcs();
     QList<ScannedBook> books;
     scanRecursive(dir, &books);
 
@@ -415,6 +437,8 @@ void MassAddDialog::addSelected()
                           .arg(q.lastError().text());
             continue;
         }
+
+        DbSchema::rememberCrc(crc, newId, QStringLiteral("массовое добавление"));
 
         if (!coverSrc.isEmpty() && coverSrc != QStringLiteral("—")) {
             if (QFileInfo::exists(coverSrc)) {

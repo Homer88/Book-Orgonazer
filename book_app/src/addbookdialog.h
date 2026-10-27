@@ -32,10 +32,12 @@ public:
 private slots:
     void browseBook();
     void browseCover();
+    void browseAppFile();
 
 private:
     QWidget *buildForm();
     void processSelectedFile();
+    void reportHistoryHit();
     QString md5OfFile(const QString &path) const;
     int langCode() const;
     QString langString() const;
@@ -56,6 +58,8 @@ private:
     QLineEdit *m_crcEdit = nullptr;
     QLineEdit *m_partEdit = nullptr;
     QLineEdit *m_imageEdit = nullptr;
+    QLineEdit *m_sourceFormatEdit = nullptr;
+    QLineEdit *m_appFileEdit = nullptr;
 
     QList<QCheckBox *> m_langChecks;
 
@@ -65,6 +69,7 @@ private:
 
     QString m_selectedFile;
     QString m_selectedCover;
+    QString m_selectedAppFile;
     QString m_md5;
     QString m_baseDir;
     QString m_noImagePath;

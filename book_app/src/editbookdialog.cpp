@@ -1,4 +1,5 @@
 #include "editbookdialog.h"
+#include "dbschema.h"
 #include "langtable.h"
 #include "settings.h"
 
@@ -32,6 +33,55 @@ void fillCombo(QComboBox *combo, const QStringList &items)
 {
     combo->addItems(items);
     combo->setEditable(true);
+}
+
+const QStringList &serviceFiles()
+{
+    static const QStringList list = {
+        QStringLiteral("cover.jpg"), QStringLiteral("thumbs.db"),
+        QStringLiteral("descripter.txt"),
+    };
+    return list;
+}
+
+bool isServiceFile(const QString &name)
+{
+    return serviceFiles().contains(name.toLower());
+}
+
+// ".chm" и "chm" — одно и то же расширение.
+QString normalizeExt(const QString &ext)
+{
+    QString e = ext.trimmed().toLower();
+    while (e.startsWith(QLatin1Char('.')))
+        e.remove(0, 1);
+    return e;
+}
+
+// Находит настоящий файл книги в папке (всё, кроме служебных и файла приложения).
+QString findBookFile(const QString &dir, const QString &preferSuffix = QString(),
+                     const QString &appSuffix = QString())
+{
+    const QString app = normalizeExt(appSuffix);
+    const QFileInfoList files = QDir(dir).entryInfoList(QDir::Files, QDir::Name);
+
+    const auto usable = [&app](const QFileInfo &fi) {
+        return !isServiceFile(fi.fileName())
+               && (app.isEmpty() || fi.suffix().toLower() != app);
+    };
+
+    const QString want = normalizeExt(preferSuffix);
+    if (!want.isEmpty()) {
+        for (const QFileInfo &fi : files) {
+            if (usable(fi) && fi.suffix().toLower() == want)
+                return fi.absoluteFilePath();
+        }
+    }
+    for (const QFileInfo &fi : files) {
+        if (usable(fi))
+            return fi.absoluteFilePath();
+    }
+    return QString();
 }
 
 QString bytesToSizeText(qint64 bytes)
@@ -146,6 +196,15 @@ QWidget *EditBookDialog::buildForm()
     fileForm->addRow(QStringLiteral("Размер:"), m_sizeEdit);
     fileForm->addRow(QStringLiteral("CRC:"), m_crcEdit);
 
+    auto *rescanRow = new QHBoxLayout;
+    auto *rescanButton = new QPushButton(QStringLiteral("Пересчитать с диска"));
+    rescanButton->setToolTip(QStringLiteral("Найти файл книги в папке и обновить "
+                                            "формат, размер и CRC"));
+    connect(rescanButton, &QPushButton::clicked, this, &EditBookDialog::rescanFromDisk);
+    rescanRow->addWidget(rescanButton);
+    rescanRow->addStretch(1);
+    fileForm->addRow(QString(), rescanRow);
+
     auto *mainBox = new QGroupBox(QStringLiteral("Основные сведения"));
     auto *mainForm = new QFormLayout(mainBox);
 
@@ -202,6 +261,20 @@ QWidget *EditBookDialog::buildForm()
     pathForm->addRow(QStringLiteral("Путь (part):"), m_partEdit);
     pathForm->addRow(QStringLiteral("Обложка:"), m_imageEdit);
 
+    m_sourceFormatEdit = new QLineEdit;
+    m_sourceFormatEdit->setPlaceholderText(QStringLiteral("Например: .iso"));
+    pathForm->addRow(QStringLiteral("Формат приложения:"), m_sourceFormatEdit);
+
+    auto *appRow = new QHBoxLayout;
+    m_appFileEdit = new QLineEdit;
+    m_appFileEdit->setReadOnly(true);
+    m_appFileEdit->setPlaceholderText(QStringLiteral("Файл приложения (iso, img...)"));
+    auto *appButton = new QPushButton(QStringLiteral("Приложить..."));
+    connect(appButton, &QPushButton::clicked, this, &EditBookDialog::browseAppFile);
+    appRow->addWidget(m_appFileEdit, 1);
+    appRow->addWidget(appButton);
+    pathForm->addRow(QStringLiteral("Приложение:"), appRow);
+
     auto *descBox = new QGroupBox(QStringLiteral("Описание"));
     auto *descLayout = new QVBoxLayout(descBox);
     m_descEdit = new QPlainTextEdit;
@@ -223,8 +296,8 @@ void EditBookDialog::loadBook()
     QSqlQuery query(QSqlDatabase::database(QStringLiteral("book")));
     query.prepare(QStringLiteral("SELECT name_book, ahtor, yaer, format, lang, "
                                  "lang_string, langav, tematica, system, studio, "
-                                 "vid, source, pages, izdatel, part, image, "
-                                 "size, crc "
+                                 "vid, source, source_format, pages, izdatel, part, "
+                                 "image, size, crc "
                                  "FROM book WHERE [index] = ?"));
     query.addBindValue(m_index);
     if (!query.exec() || !query.next())
@@ -243,14 +316,31 @@ void EditBookDialog::loadBook()
     m_studioCombo->setCurrentText(query.value(9).toString());
     m_vidCombo->setCurrentText(query.value(10).toString());
     m_sourceCombo->setCurrentText(query.value(11).toString());
-    m_pagesSpin->setValue(query.value(12).toInt());
-    m_izdatelEdit->setText(query.value(13).toString());
-    m_partEdit->setText(query.value(14).toString());
-    m_imageEdit->setText(query.value(15).toString());
-    m_sizeEdit->setText(query.value(16).toString());
-    m_crcEdit->setText(query.value(17).toString());
+    m_sourceFormatEdit->setText(query.value(12).toString());
+    m_pagesSpin->setValue(query.value(13).toInt());
+    m_izdatelEdit->setText(query.value(14).toString());
+    m_partEdit->setText(query.value(15).toString());
+    m_imageEdit->setText(query.value(16).toString());
+    m_sizeEdit->setText(query.value(17).toString());
+    m_crcEdit->setText(query.value(18).toString());
 
-    const QString dir = bookDirFromPart(m_baseDir, query.value(14).toString());
+    const QString dir = bookDirFromPart(m_baseDir, query.value(15).toString());
+    if (!dir.isEmpty()) {
+        const QString appName = query.value(12).toString().trimmed();
+        if (!appName.isEmpty()) {
+            const QString fmt = appName.startsWith(QLatin1Char('.'))
+                ? appName.mid(1) : appName;
+            const QStringList entries = QDir(dir).entryList(QDir::Files, QDir::Name);
+            for (const QString &entry : entries) {
+                if (isServiceFile(entry))
+                    continue;
+                if (QFileInfo(entry).suffix().compare(fmt, Qt::CaseInsensitive) == 0) {
+                    m_appFileEdit->setText(entry);
+                    break;
+                }
+            }
+        }
+    }
     const QString descPath = QDir(dir).filePath(QStringLiteral("descripter.txt"));
     QFile desc(descPath);
     if (desc.open(QIODevice::ReadOnly)) {
@@ -324,6 +414,13 @@ void EditBookDialog::browseNewFile()
         }
     }
 
+    if (DbSchema::crcKnown(md5, m_index)) {
+        QMessageBox::information(this, QStringLiteral("История"),
+                                 QStringLiteral("Такой файл уже обрабатывался ранее "
+                                                "(см. историю CRC)."));
+        return;
+    }
+
     m_selectedFile = file;
     m_md5 = md5;
     m_fileEdit->setText(file);
@@ -333,6 +430,55 @@ void EditBookDialog::browseNewFile()
     const QString suffix = QFileInfo(file).suffix();
     if (!suffix.isEmpty())
         m_formatCombo->setCurrentText(QLatin1Char('.') + suffix);
+}
+
+void EditBookDialog::rescanFromDisk()
+{
+    const QString dir = bookDirFromPart(m_baseDir, m_partEdit->text().trimmed());
+    if (dir.isEmpty() || !QDir(dir).exists()) {
+        QMessageBox::warning(this, QStringLiteral("Пересчёт"),
+                             QStringLiteral("Папка книги не найдена:\n%1").arg(dir));
+        return;
+    }
+
+    const QString file = findBookFile(dir, m_formatCombo->currentText().trimmed(),
+                                      m_sourceFormatEdit->text());
+    if (file.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Пересчёт"),
+                                 QStringLiteral("В папке нет файла книги."));
+        return;
+    }
+
+    const QFileInfo fi(file);
+    const QString suffix = fi.suffix();
+    if (!suffix.isEmpty())
+        m_formatCombo->setCurrentText(QLatin1Char('.') + suffix);
+    m_sizeEdit->setText(bytesToSizeText(fi.size()));
+    m_crcEdit->setText(md5OfFile(file));
+    m_fileEdit->setText(fi.fileName());
+
+    QMessageBox::information(this, QStringLiteral("Пересчёт"),
+                             QStringLiteral("Найден файл: %1\nФормат: .%2\nРазмер: %3")
+                                 .arg(fi.fileName(), suffix, bytesToSizeText(fi.size())));
+}
+
+void EditBookDialog::browseAppFile()
+{
+    const QString filter = QStringLiteral(
+        "Приложения (*.iso *.img *.bin *.cue *.mdf *.nrg *.zip *.rar);;Все файлы (*)");
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Выберите файл приложения"), QString(), filter);
+    if (file.isEmpty())
+        return;
+
+    m_selectedAppFile = file;
+    m_appFileEdit->setText(QFileInfo(file).fileName());
+
+    const QString suffix = QFileInfo(file).suffix();
+    if (!suffix.isEmpty()) {
+        m_sourceFormatEdit->setText(QLatin1Char('.') + suffix);
+        m_sourceCombo->setCurrentText(QStringLiteral("Есть"));
+    }
 }
 
 QString EditBookDialog::md5OfFile(const QString &path) const
@@ -353,101 +499,114 @@ QString EditBookDialog::md5OfFile(const QString &path) const
 
 QString EditBookDialog::commit()
 {
-    QString size = m_sizeEdit->text().trimmed();
-    QString crc = m_crcEdit->text().trimmed();
+    const QString oldCrc = m_crcEdit->text().trimmed();
     QString format = m_formatCombo->currentText().trimmed();
-
     const QString part = m_partEdit->text().trimmed();
+    const QString author = m_authorEdit->text().trimmed();
 
+    const QString dir = bookDirFromPart(m_baseDir, part);
+    if (dir.isEmpty())
+        return QStringLiteral("Не указан путь к книге (part).");
+    if (!QDir(dir).exists())
+        return QStringLiteral("Папка книги не существует:\n%1").arg(dir);
+
+    const QDir targetDir(dir);
+
+    // 1. Старый CRC уходит в историю, чтобы перевод книги больше не считался «новой».
+    DbSchema::rememberCrc(oldCrc, m_index, QStringLiteral("замена файла"));
+
+    // 2. Кладём новый файл, если он выбран.
     if (!m_selectedFile.isEmpty()) {
-        const QString dir = bookDirFromPart(m_baseDir, part);
-        if (dir.isEmpty())
-            return QStringLiteral("Не указан путь к книге (part).");
-        const QDir targetDir(dir);
-        if (!targetDir.exists())
-            return QStringLiteral("Папка книги не существует:\n%1")
-                .arg(targetDir.absolutePath());
-
-        const QString newFileName = m_authorEdit->text().trimmed() + format;
-        const QString destFile = targetDir.filePath(newFileName);
-        if (QFile::exists(destFile)) {
-            if (!QFile::remove(destFile))
-                return QStringLiteral("Не удалось заменить существующий файл:\n%1")
-                    .arg(destFile);
-        }
+        const QString destFile = targetDir.filePath(author + format);
+        if (QFile::exists(destFile) && !QFile::remove(destFile))
+            return QStringLiteral("Не удалось заменить существующий файл:\n%1").arg(destFile);
         if (!QFile::copy(m_selectedFile, destFile))
-            return QStringLiteral("Не удалось скопировать новый файл:\n%1")
-                .arg(destFile);
-
-        const QString oldFileName = m_oldAuthor.trimmed() + m_oldFormat.trimmed();
-        if (!oldFileName.isEmpty() && oldFileName != newFileName) {
-            const QString oldFile = targetDir.filePath(oldFileName);
-            if (QFile::exists(oldFile))
-                QFile::remove(oldFile);
-        }
-
-        const QStringList skipDel = {
-            QStringLiteral("cover.jpg"), QStringLiteral("thumbs.db"),
-            QStringLiteral("descripter.txt"),
-        };
-        const QStringList entries = targetDir.entryList(QDir::Files);
-        for (const QString &entry : entries) {
-            if (skipDel.contains(entry.toLower()))
-                continue;
-            if (entry == newFileName)
-                continue;
-            const QString eLow = entry.toLower();
-            if (eLow.endsWith(m_oldFormat.trimmed().toLower())) {
-                QFile::remove(targetDir.filePath(entry));
-                break;
-            }
-        }
-
+            return QStringLiteral("Не удалось скопировать новый файл:\n%1").arg(destFile);
         QFile::remove(m_selectedFile);
-        size = bytesToSizeText(QFileInfo(destFile).size());
-        crc = m_md5;
-    } else {
-        const QString dir = bookDirFromPart(m_baseDir, part);
-        if (!dir.isEmpty() && QDir(dir).exists()) {
-            const QString newFileName = m_authorEdit->text().trimmed() + format;
-            const QString newFile = QDir(dir).filePath(newFileName);
+    }
 
-            const QStringList skip = {
-                QStringLiteral("cover.jpg"),
-                QStringLiteral("thumbs.db"),
-                QStringLiteral("descripter.txt"),
-            };
-            const QStringList entries = QDir(dir).entryList(QDir::Files);
-            for (const QString &entry : entries) {
-                if (skip.contains(entry.toLower()))
-                    continue;
-                const QString ext = QFileInfo(entry).suffix().toLower();
-                if (m_oldFormat.trimmed().toLower().contains(ext) ||
-                    entry.toLower().endsWith(m_oldFormat.trimmed().toLower())) {
-                    const QString oldFile = QDir(dir).filePath(entry);
-                    if (oldFile != newFile) {
-                        if (QFile::exists(newFile))
-                            QFile::remove(newFile);
-                        if (!QFile::rename(oldFile, newFile)) {
-                            QFile::copy(oldFile, newFile);
-                            if (QFile::exists(newFile))
-                                QFile::remove(oldFile);
-                        }
-                    }
-                    break;
+    // 3. Убираем старые файлы книги (перевод pdf -> chm и т.п.) и приводим имя к автор+формат.
+    {
+        const QString newFileName = author + format;
+        const QString appName = m_appFileEdit->text().trimmed();
+        const QString appExt = m_sourceFormatEdit->text().trimmed();
+        const QString wanted = targetDir.filePath(newFileName);
+
+        // Если новый файл уже лежит под правильным именем — только подчищаем старые.
+        if (!QFile::exists(wanted)) {
+            const QString current = findBookFile(dir, m_oldFormat, appExt);
+            if (!current.isEmpty() && QFileInfo(current).fileName() != newFileName) {
+                if (!QFile::rename(current, wanted)) {
+                    if (!QFile::copy(current, wanted))
+                        return QStringLiteral("Не удалось переименовать файл:\n%1")
+                            .arg(current);
+                    QFile::remove(current);
                 }
             }
         }
+
+        for (const QFileInfo &fi : targetDir.entryInfoList(QDir::Files, QDir::Name)) {
+            if (isServiceFile(fi.fileName()))
+                continue;
+            if (fi.fileName() == newFileName)
+                continue;
+            if (!appName.isEmpty() && fi.fileName() == appName)
+                continue;
+            if (!appExt.isEmpty()
+                && fi.suffix().toLower() == normalizeExt(appExt))
+                continue;
+            QFile::remove(fi.absoluteFilePath());
+        }
     }
+
+    // 4. Файл на диске — источник истины: формат, размер и CRC читаем заново.
+    const QString actual = findBookFile(dir, format, m_sourceFormatEdit->text());
+    QString size = m_sizeEdit->text().trimmed();
+    QString crc = oldCrc;
+    if (!actual.isEmpty()) {
+        const QFileInfo fi(actual);
+        const QString suffix = fi.suffix();
+        if (!suffix.isEmpty()) {
+            format = QLatin1Char('.') + suffix;
+            m_formatCombo->setCurrentText(format);
+        }
+        size = bytesToSizeText(fi.size());
+        crc = md5OfFile(actual);
+    } else if (!m_md5.isEmpty()) {
+        crc = m_md5;
+    }
+    m_sizeEdit->setText(size);
+    m_crcEdit->setText(crc);
+    m_oldFormat = format;
+    m_oldAuthor = author;
+
+    // 5. Приложение: файл кладём рядом с книгой, в БД пишем его имя.
+    QString sourceFormat = m_sourceFormatEdit->text().trimmed();
+    if (!m_selectedAppFile.isEmpty()) {
+        const QString appDest = targetDir.filePath(QFileInfo(m_selectedAppFile).fileName());
+        if (QFileInfo(m_selectedAppFile).absoluteFilePath() != appDest) {
+            if (QFile::exists(appDest))
+                QFile::remove(appDest);
+            if (!QFile::copy(m_selectedAppFile, appDest))
+                return QStringLiteral("Не удалось скопировать приложение:\n%1").arg(appDest);
+            QFile::remove(m_selectedAppFile);
+        }
+        sourceFormat = QFileInfo(appDest).suffix();
+        if (!sourceFormat.isEmpty())
+            sourceFormat = QLatin1Char('.') + sourceFormat;
+        m_appFileEdit->setText(QFileInfo(appDest).fileName());
+        m_selectedAppFile.clear();
+    }
+    m_sourceFormatEdit->setText(sourceFormat);
 
     QSqlQuery query(QSqlDatabase::database(QStringLiteral("book")));
     query.prepare(QStringLiteral(
         "UPDATE book SET name_book = ?, ahtor = ?, yaer = ?, format = ?, "
         "lang = ?, lang_string = ?, langav = ?, tematica = ?, system = ?, "
-        "studio = ?, vid = ?, source = ?, pages = ?, izdatel = ?, part = ?, "
-        "image = ?, size = ?, crc = ? WHERE [index] = ?"));
+        "studio = ?, vid = ?, source = ?, source_format = ?, pages = ?, "
+        "izdatel = ?, part = ?, image = ?, size = ?, crc = ? WHERE [index] = ?"));
     query.addBindValue(m_nameEdit->text().trimmed());
-    query.addBindValue(m_authorEdit->text().trimmed());
+    query.addBindValue(author);
     query.addBindValue(m_yearSpin->value() == 0 ? QVariant() : QVariant(m_yearSpin->value()));
     query.addBindValue(format);
     query.addBindValue(langCode());
@@ -458,6 +617,7 @@ QString EditBookDialog::commit()
     query.addBindValue(m_studioCombo->currentText().trimmed());
     query.addBindValue(m_vidCombo->currentText().trimmed());
     query.addBindValue(m_sourceCombo->currentText().trimmed());
+    query.addBindValue(sourceFormat);
     query.addBindValue(m_pagesSpin->value() == 0 ? QVariant() : QVariant(m_pagesSpin->value()));
     query.addBindValue(m_izdatelEdit->text().trimmed());
     query.addBindValue(part);
@@ -466,11 +626,11 @@ QString EditBookDialog::commit()
     query.addBindValue(crc);
     query.addBindValue(m_index);
     if (!query.exec())
-        return QStringLiteral("Не удалось сохранить книгу:\n%1")
-            .arg(query.lastError().text());
+        return QStringLiteral("Не удалось сохранить книгу:\n%1").arg(query.lastError().text());
 
-    const QString dir = bookDirFromPart(m_baseDir, part);
-    const QString descPath = QDir(dir).filePath(QStringLiteral("descripter.txt"));
+    DbSchema::rememberCrc(crc, m_index, QStringLiteral("текущий"));
+
+    const QString descPath = targetDir.filePath(QStringLiteral("descripter.txt"));
     QFile desc(descPath);
     if (desc.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         desc.write(m_descEdit->toPlainText().toUtf8());

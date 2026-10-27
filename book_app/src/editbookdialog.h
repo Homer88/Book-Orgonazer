@@ -31,6 +31,8 @@ public:
 
 private slots:
     void browseNewFile();
+    void browseAppFile();
+    void rescanFromDisk();
 
 private:
     QWidget *buildForm();
@@ -56,6 +58,8 @@ private:
     QLineEdit *m_izdatelEdit = nullptr;
     QLineEdit *m_partEdit = nullptr;
     QLineEdit *m_imageEdit = nullptr;
+    QLineEdit *m_sourceFormatEdit = nullptr;
+    QLineEdit *m_appFileEdit = nullptr;
     QPlainTextEdit *m_descEdit = nullptr;
 
     QList<QCheckBox *> m_langChecks;
@@ -66,6 +70,7 @@ private:
 
     QStringList m_fileFilters;
     QString m_selectedFile;
+    QString m_selectedAppFile;
     QString m_md5;
 
     QString m_oldAuthor;
